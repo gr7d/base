@@ -8,39 +8,38 @@ The endpoint functions are provided with the request object as the first argumen
 ## Exposures
 Exposures are getting executed on the client side.
 
-## Example
+## Example application
 ```typescript
 import Base, { Request } from "./index.ts";
 
 class TestPage {
+    private clicked: number = 0;
+
     get endpoints() {
         return {
-            hello(req: Request) {
-                return "Hi!";
+            increaseClickCount: (req: Request) => {
+                this.clicked++;
+                return JSON.stringify({ success: true });
             }
         }
     }
 
     get exposures() {
         return {
-            async sayHi(event: Event) {
-                const hi = await (
-                    await fetch("api/hello")
-                ).text();
-
-                console.log(hi);
+            handleClick: async (event: Event) => {
+                await fetch("api/increaseClickCount");
             }
         }
     }
 
     get template() {
         return `
-            <button @onclick="sayHi">Say hi in the console!</button>
+            <button @onclick="handleClick">Click to count</button>
+            <span>Clicked ${this.clicked} times</span>
         `;
     }
 }
 
 const app = new Base(3000);
-
 app.register("/", TestPage);
 ```
