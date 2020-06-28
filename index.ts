@@ -5,7 +5,7 @@ import SessionHandler from "./session_handler.ts";
 export type Request = ServerRequest;
 
 interface UninitializedPage {
-    new(storage: { [key: string]: any; }): Page;
+    new(session: Session): Page;
 }
 
 interface Page {
@@ -19,7 +19,7 @@ interface UnfixedPage extends Page {
 }
 
 interface SessionPage extends Page {
-    _lastRenderedHTML: string;
+    _lastServedRawHTML: string;
 }
 
 class Session {
@@ -56,8 +56,8 @@ export default class Base {
 
     private getSessionPage(path: string, session: Session): SessionPage {
         if (!session.pages[path] && this.pages[path]) {
-            let temporaryPage: UnfixedPage = new this.pages[path]({});
-            temporaryPage._lastRenderedHTML = "";
+            let temporaryPage: UnfixedPage = new this.pages[path](session);
+            temporaryPage._lastServedHTML = "";
 
             const sessionPage = temporaryPage as SessionPage;
             session.addPage(path, sessionPage);
@@ -83,56 +83,57 @@ export default class Base {
     private parseTemplate(template: string, exposures: { [name: string]: any; } = {}): string {
         const clientApp = this.generateClientApp(exposures);
         const injectionScript = `<script>
-            var ws = new WebSocket(document.location.href.replace(/https|http/, "ws") + "/socket");
-            
-            ws.onmessage = function(event) {
-                var [type, content] = event.data.split("[t--c]");
-                
-                switch (type) {
-                    case "update_content":
-                        document.body.innerHTML = content;
-                        break;
-                }
-            }
-            
-            var app = JSON.parse(${JSON.stringify(clientApp)});
-            
+            const app = JSON.parse(${JSON.stringify(clientApp)});
             Object.keys(app).forEach(function(exposure) {
                 if (app[exposure].type === "function") {
-                    eval("var temp = {" + (app[exposure].value.includes(exposure) ? app[exposure].value : exposure + ":" + app[exposure].value) + "}");
+                    eval("var temp = {" + (app[exposure].value.includes(exposure + "(") ? app[exposure].value : exposure + ":" + app[exposure].value) + "}");
                     app[exposure] = temp[exposure];
                 }else {
                     app[exposure] = app[exposure].value;
                 }
             });
+
+            function bindEventListeners() {
+                document.querySelectorAll("[data-on]").forEach(bindedElement => {
+                    bindedElement.addEventListener(bindedElement.getAttribute("data-on"), app[bindedElement.getAttribute("data-handler")]);
+                });
+            }
             
-            document.querySelectorAll("[data-on]").forEach(function(bindedElement) {
-                bindedElement.addEventListener(bindedElement.getAttribute("data-on"), app[bindedElement.getAttribute("data-handler")]);
-            })
+            const ws = new WebSocket(document.location.href.replace(/https|http/, "ws") + "/socket");
+            ws.onmessage = function(event) {
+                const [type, content] = event.data.split("[t--c]");
+                
+                switch (type) {
+                    case "update_content":
+                        document.body.innerHTML = content;
+                        bindEventListeners();
+                        break;
+                }
+            }
+            
+            bindEventListeners();
         </script>`;
 
-        template = template.replace(/@on(.*?)\=/, `data-on="$1" data-handler=`);
-
-        return template + injectionScript;
+        const templateWithValidAttributes = template.replace(/@on(.*?)\=/, `data-on="$1" data-handler=`);
+        return templateWithValidAttributes + injectionScript;
     }
 
     private async handleWebSocketConnection(socket: WebSocket, page: SessionPage) {
-        let lastRenderedHTML = page._lastRenderedHTML;
+        let lastRenderedHTML = page._lastServedRawHTML;
 
         const contentUpdater = setInterval(async () => {
-            const currentRenderedHTML = this.parseTemplate(page.template, page.exposures);
+            const currentRenderedHTML = page.template;
             if (currentRenderedHTML !== lastRenderedHTML) {
                 lastRenderedHTML = currentRenderedHTML;
 
                 try {
-                    await socket.send(`update_content[t--c]${currentRenderedHTML}`);
+                    await socket.send(`update_content[t--c]${this.parseTemplate(page.template, page.exposures)}`);
                 }catch {
-                    // Pipe closed
                     clearInterval(contentUpdater);
                     socket.closeForce();
                 }
             }
-        }, 1000);
+        }, 50);
     }
 
     private async handleWebSocketRequest(path: string, session: Session, conn: any, bufReader: any, bufWriter: any, headers: Headers) {
@@ -197,7 +198,8 @@ export default class Base {
             res.headers.append("Content-Type", "text/html");
 
             if (page?.template) {
-                res.body = page._lastRenderedHTML = this.parseTemplate(page.template, page.exposures);
+                page._lastServedRawHTML = page.template;
+                res.body = this.parseTemplate(page.template, page.exposures);
             }
 
             req.respond(res);
