@@ -5,7 +5,7 @@ import SessionHandler from "./session_handler.ts";
 export type Request = ServerRequest;
 
 interface UninitializedPage {
-    new(session: Session): Page;
+    new(storage: any): Page;
 }
 
 interface Page {
@@ -22,13 +22,47 @@ interface SessionPage extends Page {
     _lastServedRawHTML: string;
 }
 
-class Session {
+export interface Storage {
+    get(name: string): any;
+    update(name: string, value: any): void;
+    create(name: string, defaultValue: any): void;
+}
+
+export class Session {
     private readonly _id: string;
     private _pages: { [path: string]: SessionPage; } = {};
-    public storage: { [key: string]: any; } = {};
+    public _storage: { pagePathThatModifiedThisEntry: string[]; name: string; value: any; }[] = [];
+    public currentPagePath: string | null = null;
 
     constructor(id: string) {
         this._id = id;
+    }
+
+    get storage() {
+        return {
+            get: (name: string) => {
+                return this._storage.find(entry => entry.name === name)?.value ?? null;
+            },
+            update: async (name: string, handler: (currentValue: any) => any) => {
+                if (!this._storage.find(entry => entry.name === name)) {
+                    return;
+                }
+
+                const entry = this._storage.find(entry => entry.name === name) as { pagePathThatModifiedThisEntry: string[]; name: string; value: any; };
+                entry!.value = await handler(entry?.value);
+
+                if (this.currentPagePath && !entry.pagePathThatModifiedThisEntry.includes(this.currentPagePath)) {
+                    entry.pagePathThatModifiedThisEntry.push(this.currentPagePath);
+                }
+            },
+            create: (name: string, defaultValue: any) => {
+                if (this._storage.find(entry => entry.name === name)) {
+                    return;
+                }
+
+                this._storage.push({ pagePathThatModifiedThisEntry: this.currentPagePath ? [ this.currentPagePath ] : [], name, value: defaultValue });
+            }
+        }
     }
 
     get id() {
@@ -54,16 +88,18 @@ export default class Base {
         this.handleRequests();
     }
 
-    private getSessionPage(path: string, session: Session): SessionPage {
-        if (!session.pages[path] && this.pages[path]) {
-            let temporaryPage: UnfixedPage = new this.pages[path](session);
+    private getSessionPage(path: string, parameters: URLSearchParams, session: Session): SessionPage {
+        if (!session.pages[path + parameters.toString()] && this.pages[path]) {
+            session._storage = session._storage.filter(entry => !entry.pagePathThatModifiedThisEntry.includes(path));
+
+            let temporaryPage: UnfixedPage = new this.pages[path](session.storage);
             temporaryPage._lastServedHTML = "";
 
             const sessionPage = temporaryPage as SessionPage;
-            session.addPage(path, sessionPage);
+            session.addPage(path + parameters.toString(), sessionPage);
         }
 
-        return session.pages[path];
+        return session.pages[path + parameters.toString()];
     }
 
     private generateClientApp(exposures: { [name: string]: any; }) {
@@ -114,8 +150,8 @@ export default class Base {
             bindEventListeners();
         </script>`;
 
-        const templateWithValidAttributes = template.replace(/@on(.*?)\=/, `data-on="$1" data-handler=`);
-        return templateWithValidAttributes + injectionScript;
+        const templateWithValidAttributes = template.replace(/@on(.*?)\=/g, `data-on="$1" data-handler=`);
+        return templateWithValidAttributes + injectionScript.replace(/ {4,}(\n|)/g, "");
     }
 
     private async handleWebSocketConnection(socket: WebSocket, page: SessionPage) {
@@ -136,15 +172,20 @@ export default class Base {
         }, 50);
     }
 
-    private async handleWebSocketRequest(path: string, session: Session, conn: any, bufReader: any, bufWriter: any, headers: Headers) {
-        const pagePath = path.replace("/socket", "");
-        const page = this.getSessionPage(pagePath, session);
+    private async handleWebSocketRequest(req: Request, parameters: URLSearchParams, session: Session, conn: any, bufReader: any, bufWriter: any, headers: Headers) {
+        const { pathname: pagePath } = new URL("http://localhost" + req.url.replace("/socket", ""));
+        const page = this.getSessionPage(pagePath, parameters, session);
 
         if (!page) {
+            req.respond({ body: "Could not setup socket connection." });
             return;
         }
 
-        await this.handleWebSocketConnection(await acceptWebSocket({ conn, bufReader, bufWriter, headers }), page);
+        try {
+            await this.handleWebSocketConnection(await acceptWebSocket({ conn, bufReader, bufWriter, headers }), page);
+        }catch {
+            req.respond({ body: "Could not setup socket connection." });
+        }
     }
 
     private getSession(req: Request, res: ServerResponse) {
@@ -160,15 +201,16 @@ export default class Base {
         return this.sessions[sessionID];
     }
 
-    private async handleEndpointRequest(req: Request, path: string, session: Session) {
-        const pagePath = path.replace(/\/api(.*)/, "") === "" ? "/" : path.replace(/\/api(.*)/, "");
-        const page = this.getSessionPage(pagePath, session);
+    private async handleEndpointRequest(req: Request, path: string, parameters: URLSearchParams, session: Session) {
+        const { pathname: pagePath } = new URL("http://localhost" + (req.url.replace(/\/api(.*)/, "") === "" ? "/" : req.url.replace(/\/api(.*)/, "")));
+        const page = this.getSessionPage(pagePath, parameters, session);
 
         if (!page) {
+            req.respond({ body: "Endpoint does not exist." });
             return;
         }
 
-        const endpoint = path.replace(/.*api\//, "");
+        const endpoint = req.url.replace(/.*api\//, "");
 
         if (!page.endpoints?.[endpoint]) {
             req.respond({ body: "Endpoint does not exist." });
@@ -182,23 +224,24 @@ export default class Base {
         for await (const req of this.server) {
             const res = { headers: new Headers(), body: "No page found, yo!" };
             const session = this.getSession(req, res);
-            const path = new URL("http://localhost" + req.url).pathname;
+            const { pathname: path, searchParams: parameters } = new URL("http://localhost" + req.url);
 
-            if (path.endsWith("/socket")) {
-                await this.handleWebSocketRequest(path, session, req.conn, req.r, req.w, req.headers);
+            if (req.url.endsWith("/socket")) {
+                await this.handleWebSocketRequest(req, parameters, session, req.conn, req.r, req.w, req.headers);
                 continue;
             }
 
-            if (path.includes("/api/")) {
-                await this.handleEndpointRequest(req, path, session);
+            if (req.url.includes("/api/")) {
+                await this.handleEndpointRequest(req, path, parameters, session);
                 continue;
             }
 
-            const page = this.getSessionPage(path, session);
+            const page = this.getSessionPage(path, parameters, session);
             res.headers.append("Content-Type", "text/html");
 
             if (page?.template) {
                 page._lastServedRawHTML = page.template;
+                session.currentPagePath = path;
                 res.body = this.parseTemplate(page.template, page.exposures);
             }
 
