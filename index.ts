@@ -141,7 +141,17 @@ export default class Base {
                 
                 switch (type) {
                     case "update_content":
-                        document.body.innerHTML = content;
+                        const temp = document.createElement("html");
+                        temp.innerHTML = content;
+                        const tempElements = Array.from(temp.querySelectorAll("body *"));
+                        const elements = Array.from(document.body.querySelectorAll("*"));
+                        
+                        for (let i = 0; i < elements.length - 1; i++) {
+                            if (elements[i].children.length > 0 || elements[i].innerHTML === tempElements[i].innerHTML) continue;
+                            
+                            elements[i].innerHTML = tempElements[i].innerHTML;
+                        }
+                        
                         bindEventListeners();
                         break;
                 }
