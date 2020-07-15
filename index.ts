@@ -82,8 +82,10 @@ export default class Base {
     private readonly server: Server;
     private pages: { [path: string]: UninitializedPage } = {};
     private sessions: { [id: string]: Session } = {};
+    private decoder: TextDecoder;
 
     constructor(port: number) {
+        this.decoder = new TextDecoder();
         this.server = serve({ port });
         this.handleRequests();
     }
@@ -105,15 +107,29 @@ export default class Base {
     private generateClientApp(exposures: { [name: string]: any; }) {
         return JSON.stringify(Object.keys(exposures).reduce((clientApp: { [name: string]: any; }, exposure) => {
             const type = typeof exposures[exposure] === "function" ? "function" : "value";
+            const value = type === "function" ? exposures[exposure].toString() : exposures[exposure];
 
             return {
                 ...clientApp,
                 [exposure]: {
                     type,
-                    value: type === "function" ? exposures[exposure].toString() : exposures[exposure]
+                    value: value.replace(/this.exposures./g, "app.")
                 }
             }
         }, {}));
+    }
+
+    private addUsefulHeadTagsAndDoctype(template: string): string {
+        const templateWithoutHead = template.replace(/<(|\/)head.*?>/g, "");
+        const htmlTag = template.match(/<html(.|\n)*?>/gm)?.[0] || "<html lang='en'>";
+
+        return `
+            ${htmlTag}
+            <!DOCTYPE html>
+            <meta charset="UTF-8">
+            <meta name="viewport" content="width=device-width, initial-scale=1">
+            ${templateWithoutHead.replace(/<html(.|\n)*?>/, "")}
+        `;
     }
 
     private parseTemplate(template: string, exposures: { [name: string]: any; } = {}): string {
@@ -122,13 +138,17 @@ export default class Base {
             const app = JSON.parse(${JSON.stringify(clientApp)});
             Object.keys(app).forEach(function(exposure) {
                 if (app[exposure].type === "function") {
-                    eval("var temp = {" + (app[exposure].value.includes(exposure + "(") ? app[exposure].value : exposure + ":" + app[exposure].value) + "}");
+                    eval("var temp = {" + (app[exposure].value.trimLeft().startsWith(exposure + "(") ? app[exposure].value : exposure + ":" + app[exposure].value) + "}");
                     app[exposure] = temp[exposure];
                 }else {
                     app[exposure] = app[exposure].value;
                 }
+                
+                if (exposure.startsWith("on") && window[exposure] !== undefined) {
+                    window[exposure] = app[exposure];
+                }
             });
-
+            
             function bindEventListeners() {
                 document.querySelectorAll("[data-on]").forEach(bindedElement => {
                     bindedElement.addEventListener(bindedElement.getAttribute("data-on"), app[bindedElement.getAttribute("data-handler")]);
@@ -161,7 +181,8 @@ export default class Base {
         </script>`;
 
         const templateWithValidAttributes = template.replace(/@on(.*?)\=/g, `data-on="$1" data-handler=`);
-        return templateWithValidAttributes + injectionScript.replace(/ {4,}(\n|)/g, "");
+        const templateWithUsefulInformation = this.addUsefulHeadTagsAndDoctype(templateWithValidAttributes);
+        return templateWithUsefulInformation + injectionScript;
     }
 
     private async handleWebSocketConnection(socket: WebSocket, page: SessionPage) {
@@ -230,6 +251,19 @@ export default class Base {
         req.respond({ body: await page.endpoints?.[endpoint](req) || "" });
     }
 
+    private async handlePublicResourceRequest(req: Request, path: string) {
+        const resource = path.replace(/.*\/(?=public\/)/, "");
+
+        try {
+            req.respond({ body: await Deno.readFile(resource) });
+        }catch (e) {
+            if ((e as Error).name === "PermissionDenied") {
+                // throw Error("Couldn't")
+            }
+            req.respond({ status: 404, body: "File not found." });
+        }
+    }
+
     private async handleRequests() {
         for await (const req of this.server) {
             const res = { headers: new Headers(), body: "No page found, yo!" };
@@ -246,7 +280,12 @@ export default class Base {
                 continue;
             }
 
-            const page = this.getSessionPage(path, parameters, session);
+            if (req.url.includes("/public/")) {
+                await this.handlePublicResourceRequest(req, path);
+                continue;
+            }
+
+            const page: SessionPage = this.getSessionPage(path, parameters, session);
             res.headers.append("Content-Type", "text/html");
 
             if (page?.template) {
