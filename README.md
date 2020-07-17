@@ -40,6 +40,6 @@ class TestPage {
     }
 }
 
-const app = new Base(3000);
+const app = new Base({ port: 3000 });
 app.register("/", TestPage);
 ```
