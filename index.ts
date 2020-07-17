@@ -1,5 +1,5 @@
-import { serve, Server, ServerRequest, Response as ServerResponse } from "https://deno.land/std@v0.42.0/http/server.ts";
-import { acceptWebSocket, WebSocket } from "https://deno.land/std@v0.42.0/ws/mod.ts";
+import { serve, serveTLS, Server, ServerRequest, Response as ServerResponse, HTTPOptions, HTTPSOptions } from "https://deno.land/std@v0.61.0/http/server.ts";
+import { acceptWebSocket, WebSocket } from "https://deno.land/std@v0.61.0/ws/mod.ts";
 import SessionHandler from "./session_handler.ts";
 
 export type Request = ServerRequest;
@@ -84,9 +84,11 @@ export default class Base {
     private sessions: { [id: string]: Session } = {};
     private decoder: TextDecoder;
 
-    constructor(port: number) {
+    constructor(options: HTTPOptions | HTTPSOptions) {
         this.decoder = new TextDecoder();
-        this.server = serve({ port });
+        this.server = (options as HTTPSOptions).keyFile
+            ? serveTLS({ ...(options as HTTPSOptions) })
+            : serve({ ...options  });
         this.handleRequests();
     }
 
@@ -138,7 +140,7 @@ export default class Base {
             const app = JSON.parse(${JSON.stringify(clientApp)});
             Object.keys(app).forEach(function(exposure) {
                 if (app[exposure].type === "function") {
-                    eval("var temp = {" + (app[exposure].value.trimLeft().startsWith(exposure + "(") ? app[exposure].value : exposure + ":" + app[exposure].value) + "}");
+                    eval("var temp = {" + (app[exposure].value.trimLeft().match(new RegExp(exposure + "\(.*?\).*?{")) ? app[exposure].value : exposure + ":" + app[exposure].value) + "}");
                     app[exposure] = temp[exposure];
                 }else {
                     app[exposure] = app[exposure].value;
@@ -155,7 +157,11 @@ export default class Base {
                 });
             }
             
-            const ws = new WebSocket(document.location.href.replace(/https|http/, "ws") + "/socket");
+            function uniquifyElement(element) {
+                return element.outerHTML.match(/<((.|\\n)*?)>/g)[0];
+            }
+            
+            const ws = new WebSocket(document.location.href.replace(/https|http/, "ws" + (document.location.protocol.includes("https") ? "s" : "")) + "/socket");
             ws.onmessage = function(event) {
                 const [type, content] = event.data.split("[t--c]");
                 
@@ -166,10 +172,27 @@ export default class Base {
                         const tempElements = Array.from(temp.querySelectorAll("body *"));
                         const elements = Array.from(document.body.querySelectorAll("*"));
                         
-                        for (let i = 0; i < elements.length - 1; i++) {
-                            if (elements[i].children.length > 0 || elements[i].innerHTML === tempElements[i].innerHTML) continue;
-                            
-                            elements[i].innerHTML = tempElements[i].innerHTML;
+                        for (const tempElement of tempElements.filter(tempElement => tempElement.children.length === 0)) {
+                            if (!elements.find(element => uniquifyElement(element) === uniquifyElement(tempElement))) {
+                                let lastSameParent = tempElement.parentElement;
+                                
+                                while(true) {
+                                    if (!lastSameParent.parentElement) {
+                                        break;
+                                    }
+                                    
+                                    if (elements.find(element => uniquifyElement(element) === uniquifyElement(lastSameParent.parentElement))) {
+                                        lastSameParent = lastSameParent.parentElement;
+                                        break;
+                                    }
+                                    
+                                    lastSameParent = lastSameParent.parentElement;
+                                }
+                                
+                                try {
+                                    elements.find(element => uniquifyElement(element) === uniquifyElement(lastSameParent)).outerHTML = lastSameParent.outerHTML;
+                                }catch(e) {}
+                            }
                         }
                         
                         bindEventListeners();
@@ -219,17 +242,14 @@ export default class Base {
         }
     }
 
-    private getSession(req: Request, res: ServerResponse) {
-        let sessionID: string = SessionHandler.getSessionID(req.headers);
+    private getSession(req: Request, path: string): Session {
+        const cookies = req.headers.get("cookie");
 
-        if (!sessionID || !this.sessions[sessionID]) {
-            const newSessionID = String(Math.floor(Math.random() * 1e16).toString(32));
-            res.headers!.append("Set-Cookie", `base=${newSessionID}`);
-            this.sessions[newSessionID] = new Session(newSessionID);
-            sessionID = newSessionID;
+        if (!this.sessions[path + JSON.stringify(cookies)]) {
+            return this.sessions[path + JSON.stringify(cookies)] = new Session(path + JSON.stringify(cookies));
         }
 
-        return this.sessions[sessionID];
+        return this.sessions[path + JSON.stringify(cookies)];
     }
 
     private async handleEndpointRequest(req: Request, path: string, parameters: URLSearchParams, session: Session) {
@@ -256,8 +276,8 @@ export default class Base {
 
         try {
             req.respond({ body: await Deno.readFile(resource) });
-        }catch (e) {
-            if ((e as Error).name === "PermissionDenied") {
+        }catch (error) {
+            if ((error as Error).name === "PermissionDenied") {
                 // throw Error("Couldn't")
             }
             req.respond({ status: 404, body: "File not found." });
@@ -267,8 +287,8 @@ export default class Base {
     private async handleRequests() {
         for await (const req of this.server) {
             const res = { headers: new Headers(), body: "No page found, yo!" };
-            const session = this.getSession(req, res);
             const { pathname: path, searchParams: parameters } = new URL("http://localhost" + req.url);
+            const session: Session = this.getSession(req, path);
 
             if (req.url.endsWith("/socket")) {
                 await this.handleWebSocketRequest(req, parameters, session, req.conn, req.r, req.w, req.headers);
@@ -300,5 +320,9 @@ export default class Base {
 
     public register(path: string, page: UninitializedPage) {
         this.pages[path] = page;
+    }
+
+    public killSessions() {
+        this.sessions = {};
     }
 }
