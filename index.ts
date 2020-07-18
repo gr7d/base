@@ -9,7 +9,7 @@ interface UninitializedPage {
 }
 
 interface Page {
-    endpoints?: { [name: string]: (req: Request) => string; };
+    endpoints?: { [name: string]: (req: Request) => void | string; };
     exposures?: { [name: string]: any; };
     template: string;
 }
@@ -93,17 +93,17 @@ export default class Base {
     }
 
     private getSessionPage(path: string, parameters: URLSearchParams, session: Session): SessionPage {
-        if (!session.pages[path + parameters.toString()] && this.pages[path]) {
+        if (!session.pages[path] && this.pages[path]) {
             session._storage = session._storage.filter(entry => !entry.pagePathThatModifiedThisEntry.includes(path));
 
             let temporaryPage: UnfixedPage = new this.pages[path](session.storage);
             temporaryPage._lastServedHTML = "";
 
             const sessionPage = temporaryPage as SessionPage;
-            session.addPage(path + parameters.toString(), sessionPage);
+            session.addPage(path, sessionPage);
         }
 
-        return session.pages[path + parameters.toString()];
+        return session.pages[path];
     }
 
     private generateClientApp(exposures: { [name: string]: any; }) {
@@ -158,10 +158,10 @@ export default class Base {
             }
             
             function uniquifyElement(element) {
-                return element.outerHTML.match(/<((.|\\n)*?)>/g)[0];
+                return element.outerHTML.match(/<((.|\\n)*?)>/g)[0] + (element.parentElement ? element.parentElement.outerHTML.match(/<((.|\\n)*?)>/g)[0] + element.parentElement.children.length : "");
             }
             
-            const ws = new WebSocket(document.location.href.replace(/https|http/, "ws" + (document.location.protocol.includes("https") ? "s" : "")) + "/socket");
+            const ws = new WebSocket("ws" + (document.location.protocol.includes("https") ? "s://" : "://") + document.location.hostname + (document.location.port.length > 1 ? ":" + document.location.port : "") + document.location.pathname + "/socket");
             ws.onmessage = function(event) {
                 const [type, content] = event.data.split("[t--c]");
                 
@@ -169,29 +169,49 @@ export default class Base {
                     case "update_content":
                         const temp = document.createElement("html");
                         temp.innerHTML = content;
-                        const tempElements = Array.from(temp.querySelectorAll("body *"));
-                        const elements = Array.from(document.body.querySelectorAll("*"));
+                        const tempElements = Array.from(temp.querySelectorAll("body *:not(script):not(img)"));
+                        const elements = Array.from(document.body.querySelectorAll("*:not(script):not(img)"));
                         
-                        for (const tempElement of tempElements.filter(tempElement => tempElement.children.length === 0)) {
-                            if (!elements.find(element => uniquifyElement(element) === uniquifyElement(tempElement))) {
-                                let lastSameParent = tempElement.parentElement;
-                                
-                                while(true) {
-                                    if (!lastSameParent.parentElement) {
-                                        break;
+                        const t = tempElements.reduce((tempElements, tempElement) => {
+                            if (
+                                elements.find(element => element.isEqualNode(tempElement))
+                                || tempElements.find(tempElementInList => tempElementInList.isEqualNode(tempElement))
+                            ) {
+                                return tempElements;
+                            }
+                            
+                            return [
+                                ...tempElements,
+                                tempElement
+                            ];
+                        }, []);                        
+
+                        for (const tempElement of t) {
+                            let deepestChildrenThatDontExistInDocument = Array.from(tempElement.children).filter(child => !elements.find(element => element.isEqualNode(child)) && elements.find(element => uniquifyElement(element) === uniquifyElement(child)));
+                           
+                            while (true) {
+                                if (deepestChildrenThatDontExistInDocument.filter(r => Array.from(r.children).filter(child => !elements.find(element => element.isEqualNode(child)) && elements.find(element => uniquifyElement(element) === uniquifyElement(child))).length > 0).length === 0)
+                                    break;
+                               
+                                for (let i = 0; i < deepestChildrenThatDontExistInDocument.length; i++) {
+                                    const deepestChildThatDontExistInDocument = deepestChildrenThatDontExistInDocument[i];
+
+                                    if (!deepestChildThatDontExistInDocument.children) continue;
+                                    const c = Array.from(deepestChildThatDontExistInDocument.children).filter(child => !elements.find(element => element.isEqualNode(child)) && elements.find(element => uniquifyElement(element) === uniquifyElement(child)));
+
+                                    if (c.length > 0) {
+                                        deepestChildrenThatDontExistInDocument.splice(i, 1);
+                                        deepestChildrenThatDontExistInDocument.push(...c);
                                     }
-                                    
-                                    if (elements.find(element => uniquifyElement(element) === uniquifyElement(lastSameParent.parentElement))) {
-                                        lastSameParent = lastSameParent.parentElement;
-                                        break;
-                                    }
-                                    
-                                    lastSameParent = lastSameParent.parentElement;
                                 }
-                                
-                                try {
-                                    elements.find(element => uniquifyElement(element) === uniquifyElement(lastSameParent)).outerHTML = lastSameParent.outerHTML;
-                                }catch(e) {}
+                            }
+                           
+                           
+                            for (const childThatDontExistInDocument of deepestChildrenThatDontExistInDocument) {
+                                const matchingChildInDocument = elements.find(element => uniquifyElement(element) === uniquifyElement(childThatDontExistInDocument));
+                               
+                                if (!matchingChildInDocument) return;
+                                matchingChildInDocument.innerHTML = childThatDontExistInDocument.innerHTML;
                             }
                         }
                         
@@ -242,14 +262,25 @@ export default class Base {
         }
     }
 
-    private getSession(req: Request, path: string): Session {
-        const cookies = req.headers.get("cookie");
+    private getSession(req: Request, res: any, path: string): Session {
+        // const cookies = req.headers.get("cookie");
+        //
+        // if (!this.sessions[path + JSON.stringify(cookies)]) {
+        //     return this.sessions[path + JSON.stringify(cookies)] = new Session(path + JSON.stringify(cookies));
+        // }
+        //
+        // return this.sessions[path + JSON.stringify(cookies)];
 
-        if (!this.sessions[path + JSON.stringify(cookies)]) {
-            return this.sessions[path + JSON.stringify(cookies)] = new Session(path + JSON.stringify(cookies));
+        let sessionID: string = SessionHandler.getSessionID(req.headers);
+
+        if (!sessionID || !this.sessions[sessionID]) {
+            const newSessionID = String(Math.floor(Math.random() * 1e16).toString(32));
+            res.headers!.append("Set-Cookie", `base=${newSessionID}`);
+            this.sessions[newSessionID] = new Session(newSessionID);
+            sessionID = newSessionID;
         }
 
-        return this.sessions[path + JSON.stringify(cookies)];
+        return this.sessions[sessionID];
     }
 
     private async handleEndpointRequest(req: Request, path: string, parameters: URLSearchParams, session: Session) {
@@ -261,7 +292,7 @@ export default class Base {
             return;
         }
 
-        const endpoint = req.url.replace(/.*api\//, "");
+        const endpoint = new URL("http://localhost" + req.url.replace(/.*api(?=\/)/, "")).pathname.replace(/^\//, "");
 
         if (!page.endpoints?.[endpoint]) {
             req.respond({ body: "Endpoint does not exist." });
@@ -288,7 +319,7 @@ export default class Base {
         for await (const req of this.server) {
             const res = { headers: new Headers(), body: "No page found, yo!" };
             const { pathname: path, searchParams: parameters } = new URL("http://localhost" + req.url);
-            const session: Session = this.getSession(req, path);
+            const session: Session = this.getSession(req, res, path);
 
             if (req.url.endsWith("/socket")) {
                 await this.handleWebSocketRequest(req, parameters, session, req.conn, req.r, req.w, req.headers);
