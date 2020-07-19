@@ -1,6 +1,11 @@
 # Base
 At the moment, Base is more of a concept than a ready-to-use framework.
 
+## ToDo
+- [ ] Server-side DOM comparison or write a more performant client-side function for updating the DOM
+- [ ] More clever way to handle sessions (Just cookies?)
+- [ ] Find a way of handling interval functions (when to kill, etc.)
+
 ## Endpoints
 Endpoints are accessible by requesting the page path + `/api/` + the endpoint name.
 The endpoint functions are provided with the request object as the first argument.
