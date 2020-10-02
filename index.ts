@@ -1,5 +1,5 @@
 import { serve, serveTLS, Server, ServerRequest, Response as ServerResponse, HTTPOptions, HTTPSOptions } from "https://deno.land/std@v0.61.0/http/server.ts";
-import { acceptWebSocket, WebSocket } from "https://deno.land/std@v0.61.0/ws/mod.ts";
+import { acceptWebSocket, WebSocket } from "https://deno.land/std@v0.71.0/ws/mod.ts";
 import SessionHandler from "./session_handler.ts";
 
 export type Request = ServerRequest;
@@ -41,7 +41,7 @@ export class Session {
     get storage() {
         return {
             get: (name: string) => {
-                return this._storage.find(entry => entry.name === name)?.value ?? null;
+                return this._storage.find(entry => entry.name === name)?.value ?? [];
             },
             update: async (name: string, handler: (currentValue: any) => any) => {
                 if (!this._storage.find(entry => entry.name === name)) {
