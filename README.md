@@ -22,7 +22,7 @@ class TestPage {
 
     get endpoints() {
         return {
-            increaseClickCount: (options: Options) => {
+            increaseClickCount: async (options: Options) => {
                 this.clicked++;
                 return JSON.stringify({ success: true });
             }
