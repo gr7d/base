@@ -37,7 +37,7 @@ interface UninitializedPage {
 }
 
 export interface Page {
-    endpoints?: { [name: string]: (options: Options) => void | string | Promise<void | { [s: string]: any; }>; };
+    endpoints?: { [name: string]: (options: Options) => Promise<void | { [s: string]: any; }>; };
     exposures?: { [name: string]: any; };
     template: string;
 }
