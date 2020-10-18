@@ -2,7 +2,7 @@
 At the moment, Base is more of a concept than a ready-to-use framework.
 
 ## ToDo
-- [ ] Server-side DOM comparison or write a more performant client-side function for updating the DOM
+- [x] Server-side DOM comparison or write a more performant client-side function for updating the DOM
 - [ ] More clever way to handle sessions (Just cookies?)
 - [ ] Find a way of handling interval functions (when to kill, etc.)
 
@@ -15,14 +15,14 @@ Exposures are getting executed on the client side.
 
 ## Example application
 ```typescript
-import Base, { Request } from "./index.ts";
+import Base, { Options } from "./index.ts";
 
 class TestPage {
     private clicked: number = 0;
 
     get endpoints() {
         return {
-            increaseClickCount: (req: Request) => {
+            increaseClickCount: (options: Options) => {
                 this.clicked++;
                 return JSON.stringify({ success: true });
             }
@@ -32,7 +32,7 @@ class TestPage {
     get exposures() {
         return {
             handleClick: async (event: Event) => {
-                await fetch("api/increaseClickCount");
+                await this.endpoints.increaseClickCount();
             }
         }
     }
