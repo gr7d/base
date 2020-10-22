@@ -24,7 +24,7 @@ class TestPage {
         return {
             increaseClickCount: async (options: Options) => {
                 this.clicked++;
-                return JSON.stringify({ success: true });
+                return { success: true };
             }
         }
     }
@@ -32,7 +32,7 @@ class TestPage {
     get exposures() {
         return {
             handleClick: async (event: Event) => {
-                await this.endpoints.increaseClickCount();
+                const success = (await this.endpoints.increaseClickCount()).success;
             }
         }
     }
