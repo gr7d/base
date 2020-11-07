@@ -1,8 +1,10 @@
 # Base
-At the moment, Base is more of a concept than a ready-to-use framework.
+
+![Base demo](https://i.imgur.com/zJQnjoM.gif)
 
 ## ToDo
 - [x] Server-side DOM comparison or write a more performant client-side function for updating the DOM
+- [x] JSX-support (very basic usage)
 - [ ] More clever way to handle sessions (Just cookies?)
 - [ ] Find a way of handling interval functions (when to kill, etc.)
 
@@ -13,38 +15,35 @@ The endpoint functions are provided with the request object as the first argumen
 ## Exposures
 Exposures are getting executed on the client side.
 
-## Example application
+## Basic. JSX.
 ```typescript
-import Base, { Options } from "./index.ts";
+import { React } from "../base.ts";
 
-class TestPage {
-    private clicked: number = 0;
+export default class Test {
+    private message: string = "";
 
     get endpoints() {
         return {
-            increaseClickCount: async (options: Options) => {
-                this.clicked++;
-                return { success: true };
-            }
-        }
-    }
-
-    get exposures() {
-        return {
-            handleClick: async (event: Event) => {
-                const success = (await this.endpoints.increaseClickCount()).success;
+            saveMessage: async (message: string) => {
+                this.message = message;
             }
         }
     }
 
     get template() {
-        return `
-            <button @onclick="handleClick">Click to count</button>
-            <span>Clicked ${this.clicked} times</span>
-        `;
+        return (
+            <div>
+                <p>You typed: {this.message}</p>
+                <input
+                    style={{ padding: 10 }}
+                    value={this.message} 
+                    onKeyUp={(e: any) => this.endpoints.saveMessage(e.currentTarget.value)}
+                />
+            </div>
+        );
     }
 }
 
 const app = new Base({ port: 3000 });
-app.register("/", TestPage);
+app.register("/", Test);
 ```
