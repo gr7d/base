@@ -241,7 +241,6 @@ export default class Base {
 
             function generateFromJSX(element: JSXElement) {
                 const eventListeners = Object.keys(element.props).filter(prop => prop.startsWith("on"));
-/*                console.log(element.type, eventListeners);*/
                 const foundFunctionsInElement: { attribute: string; name: string; handler: (...parameters: any) => any; }[] = [];
 
                 for (const eventListener of eventListeners) {
@@ -616,10 +615,7 @@ export default class Base {
         const contentUpdater = setInterval(async () => {
             const { template: currentRenderedHTML } = this.getTemplateHTML(page);
 
-/*            console.log(currentRenderedHTML.match(/500/g));*/
-
             if (currentRenderedHTML !== page._lastUpdatedRawHTML) {
-/*                console.log("not the same wtf");*/
                 page._lastUpdatedRawHTML = currentRenderedHTML;
                 const oldDom: Document = new DOMParser().parseFromString(page._lastServedRawHTML || "", "text/html")!;
                 const newDom: Document = new DOMParser().parseFromString(currentRenderedHTML || "", "text/html")!;
