@@ -1,7 +1,7 @@
 import SessionHandler from "./session_handler.ts";
-import { serve, serveTLS, Server, ServerRequest, Response as ServerResponse, HTTPOptions, HTTPSOptions } from "https://deno.land/std@v0.61.0/http/server.ts";
-import { Md5 } from "https://deno.land/std@0.74.0/hash/md5.ts";
-import { acceptWebSocket, WebSocket } from "https://deno.land/std@0.74.0/ws/mod.ts";
+import { serve, serveTLS, Server, ServerRequest, Response as ServerResponse, HTTPOptions, HTTPSOptions } from "https://deno.land/std@0.84.0/http/server.ts";
+import { Md5 } from "https://deno.land/std@0.84.0/hash/md5.ts";
+import { acceptWebSocket, WebSocket } from "https://deno.land/std@0.84.0/ws/mod.ts";
 import { DOMParser, Element, Document } from "https://deno.land/x/deno_dom/deno-dom-wasm.ts";
 import r from "https://dev.jspm.io/react";
 
