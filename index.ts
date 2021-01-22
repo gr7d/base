@@ -31,18 +31,13 @@ interface Response {
 }
 
 export interface Request {
+    raw: ServerRequest;
     method: string;
     url: string;
     path: string;
     headers: Headers;
-    contentLength: number | null;
-    body: { [name: string]: string; };
+    body: any;
     query: { [name: string]: string; };
-    conn: Deno.Conn;
-    r: any;
-    w: any;
-    done: any;
-    respond(response: Response): void;
 }
 
 type Handler = (req: Request) => (void | string | Response) | Promise<void | string | Response>;
@@ -62,7 +57,7 @@ interface UninitializedPage {
 }
 
 export interface Page {
-    endpoints?: { [name: string]: (options: Options) => Promise<void | { [s: string]: any; }>; };
+    endpoints?: { [name: string]: (...options: any) => Promise<void | { [s: string]: any; }>; };
     exposures?: { [name: string]: any; };
     getTemplate: () => string | JSXElement;
 }
@@ -254,6 +249,13 @@ export default class Base {
                 }
                 foundFunctions.push(...foundFunctionsInElement);
 
+                if (element.type === (r as any).Fragment) {
+                    element = {
+                        ...element,
+                        type: "div"
+                    };
+                }
+
                 let html = `<${element.type}`;
                 for (const foundFunction of foundFunctionsInElement) {
                     html += ` @${foundFunction.attribute.toLowerCase()}=${foundFunction.name}`;
@@ -320,7 +322,7 @@ export default class Base {
     }
 
     private setCorrectListenerAttributes(html: string): string {
-                // html.replace(/@on(.*?)\=(\s|"|'|)([a-zA-Z_0-9]*)("|'|)/g, `data-on-event=$1;$3`);
+        // html.replace(/@on(.*?)\=(\s|"|'|)([a-zA-Z_0-9]*)("|'|)/g, `data-on-event=$1;$3`);
         // @TODO: seperate by event listeners (event=listener;event=listener)
         return html.replace(/<[^<>]*?@on.*?>/g, (match: string) => {
             const onAttributes = match.match(/@on(.*?)\=(\s|"|'|)([a-zA-Z_0-9]*)("|'|)/g);
@@ -371,7 +373,7 @@ export default class Base {
 
             const app = JSON.parse(${JSON.stringify(clientApp)});
             
-            async function callEndpoint(endpoint, options) {
+            async function callEndpoint(endpoint, ...options) {
                 return await (await fetch(document.location.href.replace(/\\/$/, "") + "/api/" + endpoint, {
                     method: "post",
                     body: JSON.stringify(options)
@@ -398,7 +400,7 @@ export default class Base {
             
             app.exposures = app;
             const fakeEndpointsObject = JSON.parse('${JSON.stringify(Object.keys(endpoints || {}))}').reduce((endpoints, endpoint) => {
-                if (!endpoints[endpoint]) endpoints[endpoint] = async (options) => await callEndpoint(endpoint, options);
+                if (!endpoints[endpoint]) endpoints[endpoint] = async (...options) => await callEndpoint(endpoint, ...options);
                 return endpoints;
             }, {});
             app.endpoints = fakeEndpointsObject;
@@ -621,15 +623,8 @@ export default class Base {
                 const newDom: Document = new DOMParser().parseFromString(currentRenderedHTML || "", "text/html")!;
                 const transferInformation = this.getBodyDifferences(oldDom, newDom);
 
-                // Push message size -> https://github.com/denoland/deno/issues/8022
-                const minimumMessageLength = 1e4;
-                let stringifiedTransferInformation = JSON.stringify(transferInformation);
-                const transferInformationSize = stringifiedTransferInformation.length;
-
-                if (transferInformationSize < minimumMessageLength) stringifiedTransferInformation += " ".repeat(minimumMessageLength - transferInformationSize);
-
                 try {
-                    await socket.send(`update_content[t--c]${stringifiedTransferInformation}`);
+                    await socket.send(`update_content[t--c]${JSON.stringify(transferInformation)}`);
                 }catch {
                     clearInterval(contentUpdater);
                     socket.closeForce();
@@ -643,14 +638,14 @@ export default class Base {
         const page = this.getSessionPage(pagePath, parameters, session);
 
         if (!page) {
-            req.respond({ body: "Could not setup socket connection." });
+            req.raw.respond({ body: "Could not setup socket connection." });
             return;
         }
 
         try {
             await this.handleWebSocketConnection(await acceptWebSocket({ conn, bufReader, bufWriter, headers }), page);
         }catch {
-            req.respond({ body: "Could not setup socket connection." });
+            req.raw.respond({ body: "Could not setup socket connection." });
         }
     }
 
@@ -672,18 +667,19 @@ export default class Base {
         const page = this.getSessionPage(pagePath, parameters, session);
 
         if (!page) {
-            req.respond({ body: "Endpoint does not exist.", status: 404 });
+            req.raw.respond({ body: "Endpoint does not exist.", status: 404 });
             return;
         }
 
         const endpoint = new URL("http://localhost" + req.url.replace(/.*api(?=\/)/, "")).pathname.replace(/^\//, "");
 
         if (!page.endpoints?.[endpoint]) {
-            req.respond({ body: "Endpoint does not exist." });
+            req.raw.respond({ body: "Endpoint does not exist." });
             return;
         }
 
-        req.respond({ body: JSON.stringify(await page.endpoints?.[endpoint](req.body)) || "{}" });
+        const arrayBody = Array.isArray(req.body) ? req.body : [...req.body];
+        req.raw.respond({ body: JSON.stringify(await page.endpoints?.[endpoint](...arrayBody)) || "{}" });
     }
 
     private async handlePublicResourceRequest(req: Request, path: string) {
@@ -696,12 +692,9 @@ export default class Base {
         })();
 
         try {
-            req.respond({ headers: contentType ? new Headers({ "Content-Type": contentType, "Cache-Control": "max-age=7776000000" }) : new Headers({ "Cache-Control": "max-age=7776000000" }), body: await Deno.readFile(resource) });
+            req.raw.respond({ headers: contentType ? new Headers({ "Content-Type": contentType, "Cache-Control": "max-age=7776000000" }) : new Headers({ "Cache-Control": "max-age=7776000000" }), body: await Deno.readFile(resource) });
         }catch (error) {
-            if ((error as Error).name === "PermissionDenied") {
-                // throw Error("Couldn't")
-            }
-            req.respond({ status: 404, body: "File not found." });
+            req.raw.respond({ status: 404, body: "File not found." });
         }
     }
 
@@ -720,11 +713,11 @@ export default class Base {
         }, {}) || {};
     }
 
-    private async parseBody(req: Request | ServerRequest): Promise<{ [name: string]: string; }> {
+    private async parseBody(req: ServerRequest): Promise<{ [name: string]: string; }> {
         if (!req.contentLength) return {};
 
         const buffer: Uint8Array = new Uint8Array(req.contentLength || 0);
-        const lengthRead: number = await (req.body as any).read(buffer) || 0;
+        const lengthRead: number = await req.body.read(buffer) || 0;
         const rawBody: string = new TextDecoder().decode(buffer.subarray(0, lengthRead));
         let body: {} = {};
 
@@ -755,18 +748,13 @@ export default class Base {
             const query: { [name: string]: string; } = await this.parseQuery(_req);
             const { pathname: path, searchParams: parameters } = new URL("http://localhost" + _req.url);
             const req: Request = {
+                raw: _req,
                 body,
                 path,
                 query,
                 method: _req.method,
-                conn: _req.conn,
-                contentLength: _req.contentLength,
                 headers: _req.headers,
-                r: _req.r,
                 url: _req.url,
-                w: _req.w,
-                respond: _req.respond,
-                done: _req.done
             };
 
             let handlerMatched = false;
@@ -775,9 +763,9 @@ export default class Base {
                 if (typeof handlerResponse === "string" || (typeof handlerResponse === "object" && handlerResponse.body)) {
                     handlerMatched = true;
                     if (typeof handlerResponse === "string") {
-                        req.respond({ body: handlerResponse });
+                        req.raw.respond({ body: handlerResponse });
                     }else if (typeof handlerResponse === "object") {
-                        req.respond(handlerResponse);
+                        req.raw.respond(handlerResponse);
                     }
                 }
             }
@@ -787,7 +775,7 @@ export default class Base {
             const session: Session = this.getSession(req, res, path);
 
             if (req.url.endsWith("/socket")) {
-                await this.handleWebSocketRequest(req, parameters, session, req.conn, req.r, req.w, req.headers);
+                await this.handleWebSocketRequest(req, parameters, session, req.raw.conn, req.raw.r, req.raw.w, req.headers);
                 continue;
             }
 
@@ -821,7 +809,7 @@ export default class Base {
                 res.headers.append("etag", this.createMd5Hash(res.body));
             }
 
-            req.respond(res);
+            req.raw.respond(res);
         }
     }
 
