@@ -17,17 +17,14 @@ Exposures are getting executed on the client side.
 
 ## Basic. JSX.
 ```typescript
-import { React } from "../base.ts";
+import Base, { React, endpoint } from "../base.ts";
 
 export default class Test {
     private message: string = "";
 
-    get endpoints() {
-        return {
-            saveMessage: async (message: string) => {
-                this.message = message;
-            }
-        }
+    @endpoint
+    async saveMessage(message: string) {
+        this.message = message;
     }
 
     get template() {
@@ -36,8 +33,8 @@ export default class Test {
                 <p>You typed: {this.message}</p>
                 <input
                     style={{ padding: 10 }}
-                    value={this.message} 
-                    onKeyUp={(e: any) => this.endpoints.saveMessage(e.currentTarget.value)}
+                    value={this.message}
+                    onKeyUp={(e: any) => this.saveMessage(e.currentTarget.value)}
                 />
             </div>
         );

@@ -77,6 +77,30 @@ export interface Storage {
     create(name: string, defaultValue: any): void;
 }
 
+export function exposure(
+    target: Object,
+    propertyName: string,
+    propertyDescriptor: PropertyDescriptor): PropertyDescriptor {
+    const handler = propertyDescriptor.value;
+    propertyDescriptor.value = {
+        type: "exposure",
+        handler
+    };
+    return propertyDescriptor;
+}
+
+export function endpoint(
+    target: Object,
+    propertyName: string,
+    propertyDescriptor: PropertyDescriptor): PropertyDescriptor {
+    const handler = propertyDescriptor.value;
+    propertyDescriptor.value = {
+        type: "endpoint",
+        handler
+    };
+    return propertyDescriptor;
+}
+
 export function getDocumentByHTML(html: string): Document {
     return new DOMParser().parseFromString(html, "text/html") as Document;
 }
@@ -239,13 +263,14 @@ export default class Base {
                 const foundFunctionsInElement: { attribute: string; name: string; handler: (...parameters: any) => any; }[] = [];
 
                 for (const eventListener of eventListeners) {
-                    let name = element.props[eventListener].name;
+                    const eventListenerFunction = element.props[eventListener]?.handler || element.props[eventListener];
+                    let name = eventListenerFunction.name;
 
-                    if (element.props[eventListener].name === eventListener) {
+                    if (name === eventListener) {
                         name += element.type + element.props.children?.length || 0;
                     }
 
-                    foundFunctionsInElement.push({ attribute: eventListener, name, handler: element.props[eventListener] });
+                    foundFunctionsInElement.push({ attribute: eventListener, name, handler: eventListenerFunction });
                 }
                 foundFunctions.push(...foundFunctionsInElement);
 
@@ -403,6 +428,7 @@ export default class Base {
                 if (!endpoints[endpoint]) endpoints[endpoint] = async (...options) => await callEndpoint(endpoint, ...options);
                 return endpoints;
             }, {});
+            Object.assign(app, fakeEndpointsObject);
             app.endpoints = fakeEndpointsObject;
             
             function bindEventListeners() {
@@ -678,8 +704,8 @@ export default class Base {
             return;
         }
 
-        const arrayBody = Array.isArray(req.body) ? req.body : [...req.body];
-        req.raw.respond({ body: JSON.stringify(await page.endpoints?.[endpoint](...arrayBody)) || "{}" });
+        const arrayBody = Array.isArray(req.body) ? req.body : [req.body];
+        req.raw.respond({ body: JSON.stringify(await page.endpoints?.[endpoint].bind(page)(...arrayBody)) || "{}" });
     }
 
     private async handlePublicResourceRequest(req: Request, path: string) {
@@ -814,6 +840,26 @@ export default class Base {
     }
 
     public register(path: string, page: RawUninitializedPage) {
+        const decoratorEndpoints: Record<string, void> = {};
+        const decoratorExposures: Record<string, void> = {};
+
+        const ignoreFunctions = ["constructor", "template"];
+        for (const classFunctionName of Object.getOwnPropertyNames(page.prototype).filter((r: string) => !ignoreFunctions.includes(r))) {
+            const classFunction = page.prototype[classFunctionName];
+
+            if (classFunction.type === "endpoint") {
+                decoratorEndpoints[classFunctionName] = classFunction.handler;
+                continue;
+            }
+
+            if (classFunction.type === "exposure") {
+                decoratorExposures[classFunctionName] = classFunction.handler;
+            }
+        }
+
+        page.prototype.endpoints = {...page.prototype.endpoints, ...decoratorEndpoints};
+        page.prototype.exposures = {...page.prototype.exposures, ...decoratorExposures};
+
         page.prototype.getTemplate = function() {
             return this.template;
         }
